@@ -19,9 +19,8 @@ FROM node:18-alpine
 RUN apk add --no-cache \
     ffmpeg \
     python3 \
-    curl \
-    && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
-    && chmod a+rx /usr/local/bin/yt-dlp
+    py3-pip \
+    && pip3 install --no-cache-dir --break-system-packages yt-dlp
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \

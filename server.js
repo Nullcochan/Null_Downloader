@@ -41,7 +41,7 @@ function initTmpDir() {
 }
 
 // yt-dlpコマンド構築
-function buildYtDlpCommand(url, formatSelector, downloadType, audioFormat, outputPath) {
+function buildYtDlpCommand(url, formatSelector, downloadType, audioFormat, outputPath, client = 'web') {
   const baseOptions = [
     '--no-playlist',
     `-N ${YTDLP_OPTIONS.connections}`,
@@ -52,7 +52,7 @@ function buildYtDlpCommand(url, formatSelector, downloadType, audioFormat, outpu
     `--extractor-retries ${YTDLP_OPTIONS.extractorRetries}`,
     `--file-access-retries ${YTDLP_OPTIONS.fileAccessRetries}`,
     // オリジナル音声を優先（自動吹き替えを回避）
-    '--extractor-args "youtube:player_client=web"'
+    `--extractor-args "youtube:player_client=${client}"`
   ].join(' ');
 
   if (downloadType === 'audio') {
@@ -175,6 +175,11 @@ function execCommand(command) {
 initTmpDir();
 
 // ==================== エンドポイント ====================
+
+// ヘルスチェックエンドポイント（Renderデプロイ用）
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
 
 // ダウンロードエンドポイント
 app.post('/download', async (req, res) => {
