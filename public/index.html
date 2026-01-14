@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Null Downloader - 動画・音声ダウンローダー</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <!-- ヘッダー -->
+    <div class="header">
+      <h1>Null Downloader</h1>
+      <p>動画・音声ダウンローダー</p>
+    </div>
+
+    <!-- メインカード -->
+    <div class="card">
+      <!-- URL入力セクション -->
+      <div class="input-section">
+        <div class="input-wrapper">
+          <input
+            type="text"
+            id="urlInput"
+            placeholder="https://www.youtube.com/watch?v=... (YouTube, TikTok, Vimeo, etc.)"
+            autocomplete="off"
+          >
+          <button id="analyzeBtn" onclick="startDownload()">解析する</button>
+        </div>
+      </div>
+
+      <!-- サムネイル表示セクション -->
+      <div class="thumbnail-section" id="thumbnailSection" style="display: none;">
+        <div class="thumbnail-container">
+          <img id="videoThumbnail" src="" alt="Video Thumbnail" style="display: none;">
+          <div id="soundOnlyPlaceholder" class="sound-only-placeholder" style="display: none;">
+            <span>🎵</span>
+            <p>Sound Only</p>
+          </div>
+        </div>
+        <div class="video-title" id="videoTitle"></div>
+      </div>
+
+      <!-- 統合フォーマット選択セクション -->
+      <div class="quality-section" id="qualitySection">
+        <div class="quality-group">
+          <label for="formatSelector">フォーマットを選択:</label>
+          <div class="quality-controls">
+            <select id="formatSelector" disabled>
+              <option value="">解析してください</option>
+            </select>
+            <button onclick="downloadSelected()" id="downloadBtn" disabled>ダウンロード</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ステータス表示 -->
+      <div class="status info" id="status">
+        <span class="status-icon">ℹ️</span>
+        <span class="status-text">URLを入力して解析ボタンを押してください</span>
+      </div>
+
+      <!-- ダウンロード進捗バー -->
+      <div class="progress-container" id="progressContainer" style="display: none;">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+          <span class="progress-text" id="progressText">0% Download</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- フッター -->
+    <div class="footer">
+      <p>個人利用目的のみ。著作権法を遵守してご利用ください。</p>
+    </div>
+  </div>
+
+  <script>
+    let currentVideoFormats = [];
+    let currentUrl = '';
+    let currentVideoTitle = '';
+
+    // パターンB: URL解析機能
+    async function startDownload() {
+      const urlInput = document.getElementById('urlInput');
+      const analyzeBtn = document.getElementById('analyzeBtn');
+      const url = urlInput.value.trim();
+
+      if (!url) {
+        updateStatus('error', 'URLを入力してください');
+        return;
+      }
+
+      if (!isValidUrl(url)) {
+        updateStatus('error', '有効なURLを入力してください');
+        return;
+      }
+
+      currentUrl = url;
+
+      try {
+        // ボタンを無効化
+        analyzeBtn.disabled = true;
+        analyzeBtn.textContent = '解析中...';
+        updateStatus('loading', 'URLを解析しています...');
+
+        // URL解析
+        const response = await fetch('/analyze', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ url })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'URL解析に失敗しました');
+        }
+
+        const data = await response.json();
+        currentVideoFormats = data.video_formats;
+
+        // 動画タイトルを保存
+        if (data.video_info && data.video_info.title) {
+          currentVideoTitle = data.video_info.title;
+        }
+
+        // サムネイル表示
+        displayThumbnail(data.video_info);
+
+        // 統合フォーマットセレクターを有効化
+        populateFormatSelector();
+
+        const qualitySection = document.getElementById('qualitySection');
+        qualitySection.classList.add('active');
+
+        updateStatus('info', `解析完了！ダウンロードするフォーマットを選択してください`);
+
+      } catch (error) {
+        console.error('Error:', error);
+        updateStatus('error', error.message);
+      } finally {
+        // ボタンを再有効化
+        analyzeBtn.disabled = false;
+        analyzeBtn.textContent = '解析する';
+      }
+    }
+
+    // サムネイル表示処理
+    function displayThumbnail(videoInfo) {
+      const thumbnailSection = document.getElementById('thumbnailSection');
+      const videoThumbnail = document.getElementById('videoThumbnail');
+      const soundOnlyPlaceholder = document.getElementById('soundOnlyPlaceholder');
+      const videoTitle = document.getElementById('videoTitle');
+
+      // セクションを表示
+      thumbnailSection.style.display = 'block';
+
+      // タイトルを表示
+      if (videoInfo && videoInfo.title) {
+        videoTitle.textContent = videoInfo.title;
+      } else {
+        videoTitle.textContent = 'タイトル不明';
+      }
+
+      if (videoInfo && videoInfo.thumbnail) {
+        // サムネイルがある場合は画像を表示
+        videoThumbnail.src = videoInfo.thumbnail;
+        videoThumbnail.style.display = 'block';
+        soundOnlyPlaceholder.style.display = 'none';
+      } else {
+        // サムネイルがない場合は "Sound Only" を表示
+        videoThumbnail.style.display = 'none';
+        soundOnlyPlaceholder.style.display = 'flex';
+      }
+    }
+
+    // 統合フォーマットセレクターを構築
+    function populateFormatSelector() {
+      const formatSelector = document.getElementById('formatSelector');
+      const downloadBtn = document.getElementById('downloadBtn');
+
+      formatSelector.innerHTML = '<option value="">フォーマットを選択してください</option>';
+
+      // 動画フォーマットグループ
+      const videoOptgroup = document.createElement('optgroup');
+      videoOptgroup.label = '📹 Video';
+
+      // 重複解像度を除去（同じresolutionは1つだけ表示）
+      const uniqueFormats = [];
+      const seenResolutions = new Set();
+
+      currentVideoFormats.forEach(format => {
+        if (!seenResolutions.has(format.resolution)) {
+          seenResolutions.add(format.resolution);
+          uniqueFormats.push(format);
+        }
+      });
+
+      uniqueFormats.forEach(format => {
+        const option = document.createElement('option');
+        option.value = `video:${format.format_id}`;
+        const filesize = format.filesize ? ` (${formatFileSize(format.filesize)})` : '';
+        option.textContent = `MP4 (${format.resolution})${filesize}`;
+        videoOptgroup.appendChild(option);
+      });
+
+      formatSelector.appendChild(videoOptgroup);
+
+      // 音声フォーマットグループ
+      const audioOptgroup = document.createElement('optgroup');
+      audioOptgroup.label = '🎵 Audio';
+
+      const audioFormats = [
+        { value: 'mp3', label: 'MP3' },
+        { value: 'wav', label: 'WAV' },
+        { value: 'm4a', label: 'M4A' },
+        { value: 'flac', label: 'FLAC' },
+        { value: 'aac', label: 'AAC' }
+      ];
+
+      audioFormats.forEach(format => {
+        const option = document.createElement('option');
+        option.value = `audio:${format.value}`;
+        option.textContent = format.label;
+        audioOptgroup.appendChild(option);
+      });
+
+      formatSelector.appendChild(audioOptgroup);
+
+      formatSelector.disabled = false;
+      downloadBtn.disabled = false;
+    }
+
+    // ファイルサイズをフォーマット
+    function formatFileSize(bytes) {
+      if (!bytes) return '';
+      const mb = bytes / (1024 * 1024);
+      if (mb >= 1024) {
+        return `${(mb / 1024).toFixed(2)}GB`;
+      }
+      return `${mb.toFixed(2)}MB`;
+    }
+
+    // 統合ダウンロード処理
+    async function downloadSelected() {
+      const formatSelector = document.getElementById('formatSelector');
+      const selectedValue = formatSelector.value;
+
+      if (!selectedValue) {
+        updateStatus('error', 'フォーマットを選択してください');
+        return;
+      }
+
+      // 選択値を解析（video:format_id または audio:format）
+      const [type, value] = selectedValue.split(':');
+
+      if (type === 'video') {
+        // 動画ダウンロード
+        await performDownload(value, 'video', null);
+      } else if (type === 'audio') {
+        // 音声ダウンロード
+        await performDownload(null, 'audio', value);
+      }
+    }
+
+    // 進捗バー更新
+    function updateProgress(percent) {
+      const progressContainer = document.getElementById('progressContainer');
+      const progressFill = document.getElementById('progressFill');
+      const progressText = document.getElementById('progressText');
+
+      progressContainer.style.display = 'block';
+      progressFill.style.width = `${percent}%`;
+      progressText.textContent = `${percent}% Download`;
+    }
+
+    // 進捗バーを隠す
+    function hideProgress() {
+      const progressContainer = document.getElementById('progressContainer');
+      progressContainer.style.display = 'none';
+    }
+
+    // ダウンロード実行
+    async function performDownload(formatId, downloadType, audioFormat) {
+      try {
+        // 進捗バーを0%で表示
+        updateProgress(0);
+        updateStatus('loading', 'ダウンロード中...');
+
+        const requestBody = {
+          url: currentUrl,
+          format_id: formatId,
+          download_type: downloadType
+        };
+
+        // 音声フォーマットが指定されている場合は追加
+        if (audioFormat) {
+          requestBody.audio_format = audioFormat;
+        }
+
+        // 動画タイトルを追加
+        if (currentVideoTitle) {
+          requestBody.title = currentVideoTitle;
+        }
+
+        const response = await fetch('/download', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || 'ダウンロードに失敗しました');
+        }
+
+        // Content-Lengthから総ファイルサイズを取得
+        const contentLength = response.headers.get('Content-Length');
+        const totalSize = parseInt(contentLength, 10);
+
+        // ファイル名を取得
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let defaultExt = 'mp4';
+        if (downloadType === 'audio') {
+          defaultExt = audioFormat || 'mp3';
+        }
+        let filename = currentVideoTitle ? `${currentVideoTitle}.${defaultExt}` : `download.${defaultExt}`;
+
+        if (contentDisposition) {
+          const matches = /filename\*?=['"]?(?:UTF-\d['"]*)?([^;\r\n"']*)['"]?;?/.exec(contentDisposition);
+          if (matches != null && matches[1]) {
+            filename = decodeURIComponent(matches[1]);
+          }
+        }
+
+        // ストリーム読み取りで進捗表示
+        const reader = response.body.getReader();
+        const chunks = [];
+        let receivedSize = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+
+          if (done) break;
+
+          chunks.push(value);
+          receivedSize += value.length;
+
+          // 進捗率を計算して更新
+          if (totalSize) {
+            const percent = Math.round((receivedSize / totalSize) * 100);
+            updateProgress(percent);
+          }
+        }
+
+        // 全チャンクを結合してBlobを作成
+        const blob = new Blob(chunks);
+
+        // ダウンロード実行
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(downloadUrl);
+        document.body.removeChild(a);
+
+        updateStatus('success', 'ダウンロード完了！');
+        hideProgress();
+      } catch (error) {
+        console.error('Error:', error);
+        updateStatus('error', error.message);
+        hideProgress();
+      }
+    }
+
+    // ユーティリティ関数
+    function isValidUrl(string) {
+      try {
+        const url = new URL(string);
+        return url.protocol === 'http:' || url.protocol === 'https:';
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function updateStatus(type, message) {
+      const statusDiv = document.getElementById('status');
+      const statusText = statusDiv.querySelector('.status-text');
+      const statusIcon = statusDiv.querySelector('.status-icon');
+
+      // クラスをリセット
+      statusDiv.className = 'status';
+      statusDiv.classList.add(type);
+
+      // アイコンを更新
+      const icons = {
+        info: 'ℹ️',
+        success: '✅',
+        error: '❌',
+        loading: '<span class="spinner"></span>'
+      };
+
+      statusIcon.innerHTML = icons[type] || icons.info;
+      statusText.textContent = message;
+    }
+
+    // Enterキーで解析開始
+    document.getElementById('urlInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        startDownload();
+      }
+    });
+  </script>
+</body>
+</html>

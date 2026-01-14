@@ -1,0 +1,43 @@
+# Node
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Temporary files
+tmp/*
+*.log
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Documentation
+*.md
+要件定義書.md
+設計書.md
+修正指示
+
+# Test files
+test_download.mp4
+analyze_result.json
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

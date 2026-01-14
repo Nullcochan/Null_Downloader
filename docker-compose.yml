@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  null-downloader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: null-downloader
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - MAX_CONCURRENT_DOWNLOADS=3
+      - DOWNLOAD_TIMEOUT_MS=300000
+      - TMP_DIR=/app/tmp
+      - LOG_LEVEL=info
+    volumes:
+      # Optional: Persistent tmp directory (comment out for ephemeral storage)
+      # - ./tmp:/app/tmp
+      # Optional: Custom public directory
+      # - ./public:/app/public:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); });"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+      retries: 3
+    networks:
+      - downloader-network
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+networks:
+  downloader-network:
+    driver: bridge
