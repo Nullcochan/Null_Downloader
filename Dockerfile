@@ -16,12 +16,12 @@ RUN npm ci --only=production
 FROM node:18-alpine
 
 # Install runtime dependencies (yt-dlp and ffmpeg)
-# Note: Use --break-system-packages if necessary for newer Alpine versions
 RUN apk add --no-cache \
     ffmpeg \
     python3 \
-    py3-pip \
-    && pip3 install --no-cache-dir --break-system-packages yt-dlp || pip3 install --no-cache-dir yt-dlp
+    curl \
+    && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \

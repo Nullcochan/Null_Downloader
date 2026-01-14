@@ -10,6 +10,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const TMP_DIR = path.join(__dirname, 'tmp');
 
+// URL解析中キュー（同一URLの重複リクエスト抑制）
+const pendingAnalyses = new Map();
+
 // フォーマット情報キャッシュ（TTL: 1時間）
 const formatCache = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
 
@@ -182,27 +185,45 @@ app.post('/download', async (req, res) => {
   }
 
   const timestamp = Date.now();
+  const requestId = Math.random().toString(36).substring(7);
+  const jobId = `${timestamp}_${requestId}`;
+
   const expectedExt = download_type === 'audio' ? (audio_format || 'mp3') : 'mp4';
   const contentType = download_type === 'audio'
     ? (expectedExt === 'wav' ? 'audio/wav' : 'audio/mpeg')
     : 'video/mp4';
-  const outputPath = path.join(TMP_DIR, `${timestamp}.${expectedExt}`);
+  const outputPath = path.join(TMP_DIR, `${jobId}.${expectedExt}`);
 
-  console.log(`[Download] URL: ${url}, Format: ${format_id || 'auto'}, Type: ${download_type || 'video'}`);
+  console.log(`[Download][${jobId}] URL: ${url}, Format: ${format_id || 'auto'}, Type: ${download_type || 'video'}`);
 
   try {
-    // フォーマットセレクター決定
-    const formatSelector = determineFormatSelector(format_id, download_type);
+    // クライアントをローテーションしてリトライ
+    const clients = ['web', 'ios', 'android', 'mweb'];
+    let lastError;
+    let downloadSuccess = false;
 
-    // yt-dlpコマンド構築・実行
-    const ytDlpCommand = buildYtDlpCommand(url, formatSelector, download_type, expectedExt, outputPath);
-    console.log(`[Execute] ${ytDlpCommand}`);
-    await execCommand(ytDlpCommand);
+    for (const client of clients) {
+      try {
+        const formatSelector = determineFormatSelector(format_id, download_type);
+        const ytDlpCommand = buildYtDlpCommand(url, formatSelector, download_type, expectedExt, outputPath, client);
+        console.log(`[Execute Download][${jobId}] Client: ${client}, Command: ${ytDlpCommand}`);
+        await execCommand(ytDlpCommand);
+        downloadSuccess = true;
+        break; // 成功したらループを抜ける
+      } catch (err) {
+        console.warn(`[Download Attempt Failed] Client: ${client}, Error: ${err.message}`);
+        lastError = err;
+      }
+    }
+
+    if (!downloadSuccess) {
+      throw lastError || new Error('すべてのクライアントでダウンロードに失敗しました');
+    }
 
     // ファイル確認・マージ処理
     if (!existsSync(outputPath)) {
-      console.log('[Check] Output not found, checking intermediate files...');
-      const { videoFiles, audioFiles } = await findIntermediateFiles(timestamp, TMP_DIR);
+      console.log(`[Check][${jobId}] Output not found, checking intermediate files...`);
+      const { videoFiles, audioFiles } = await findIntermediateFiles(jobId, TMP_DIR);
 
       if (videoFiles.length > 0 && audioFiles.length > 0) {
         // 手動マージ必要
@@ -254,8 +275,8 @@ app.post('/download', async (req, res) => {
     fileStream.pipe(res);
 
   } catch (error) {
-    console.error('[Download Error]', error);
-    await cleanupTimestampFiles(timestamp, TMP_DIR);
+    console.error(`[Download Error][${jobId}]`, error);
+    await cleanupTimestampFiles(jobId, TMP_DIR);
 
     if (!res.headersSent) {
       res.status(500).json({
@@ -278,76 +299,118 @@ app.post('/analyze', async (req, res) => {
 
   const cacheKey = `format_${url}`;
 
-  try {
-    // キャッシュチェック
-    const cachedData = formatCache.get(cacheKey);
-    if (cachedData) {
-      console.log('[Cache] Hit');
-      return res.json(cachedData);
+  const analysisPromise = (async () => {
+    try {
+      // キャッシュチェック
+      const cachedData = formatCache.get(cacheKey);
+      if (cachedData) {
+        console.log('[Cache] Hit');
+        return cachedData;
+      }
+
+      console.log('[Cache] Miss, fetching...');
+
+      // クライアントをローテーションしてリトライ（解析）
+      const clients = ['web', 'ios', 'android', 'mweb'];
+      let lastError;
+      let jsonOutput;
+      let analyzeSuccess = false;
+
+      for (const client of clients) {
+        try {
+          const ytDlpCommand = `yt-dlp --dump-json --no-playlist --no-warnings --no-check-certificate --extractor-args "youtube:player_client=${client}" "${url}"`;
+          console.log(`[Execute Analyze] Client: ${client}, Command: ${ytDlpCommand}`);
+          jsonOutput = await execCommand(ytDlpCommand);
+          analyzeSuccess = true;
+          break;
+        } catch (err) {
+          console.warn(`[Analyze Attempt Failed] Client: ${client}, Error: ${err.message}`);
+          lastError = err;
+        }
+      }
+
+      if (!analyzeSuccess) {
+        throw lastError || new Error('すべてのクライアントで解析に失敗しました');
+      }
+
+      // JSONのみを抽出（前後にある余分な出力を除去）
+      const jsonStart = jsonOutput.indexOf('{');
+      const jsonEnd = jsonOutput.lastIndexOf('}') + 1;
+      if (jsonStart === -1 || jsonEnd === 0) {
+        console.error('[Invalid JSON output]', jsonOutput);
+        throw new Error('解析結果が正しいJSON形式ではありません');
+      }
+
+      const cleanJson = jsonOutput.substring(jsonStart, jsonEnd);
+      const videoInfo = JSON.parse(cleanJson);
+
+      const formats = videoInfo.formats || [];
+
+      // 動画フォーマット抽出
+      const videoFormats = formats
+        .filter(f => f.vcodec !== 'none' && f.height)
+        .map(f => ({
+          format_id: f.format_id,
+          ext: f.ext,
+          resolution: `${f.height}p`,
+          height: f.height,
+          fps: f.fps || 'N/A',
+          vcodec: f.vcodec,
+          acodec: f.acodec,
+          filesize: f.filesize || f.filesize_approx || null,
+          format_note: f.format_note || ''
+        }))
+        .sort((a, b) => b.height - a.height);
+
+      // 音声フォーマット抽出
+      const audioFormats = formats
+        .filter(f => f.acodec !== 'none' && f.vcodec === 'none')
+        .map(f => ({
+          format_id: f.format_id,
+          ext: f.ext,
+          abr: f.abr || 'N/A',
+          acodec: f.acodec,
+          filesize: f.filesize || f.filesize_approx || null,
+          format_note: f.format_note || ''
+        }))
+        .sort((a, b) => (b.abr || 0) - (a.abr || 0));
+
+      const responseData = {
+        success: true,
+        video_info: {
+          title: videoInfo.title,
+          duration: videoInfo.duration,
+          thumbnail: videoInfo.thumbnail,
+          uploader: videoInfo.uploader,
+          view_count: videoInfo.view_count
+        },
+        video_formats: videoFormats,
+        audio_formats: audioFormats
+      };
+
+      formatCache.set(cacheKey, responseData);
+      console.log(`[Success] ${videoFormats.length} video, ${audioFormats.length} audio formats`);
+
+      return responseData;
+
+    } catch (error) {
+      console.error('[Analyze Error]', error);
+      throw error;
     }
+  })();
 
-    console.log('[Cache] Miss, fetching...');
+  pendingAnalyses.set(url, analysisPromise);
 
-    // yt-dlp実行
-    const ytDlpCommand = `yt-dlp --dump-json --no-playlist "${url}"`;
-    const jsonOutput = await execCommand(ytDlpCommand);
-    const videoInfo = JSON.parse(jsonOutput);
-
-    const formats = videoInfo.formats || [];
-
-    // 動画フォーマット抽出
-    const videoFormats = formats
-      .filter(f => f.vcodec !== 'none' && f.height)
-      .map(f => ({
-        format_id: f.format_id,
-        ext: f.ext,
-        resolution: `${f.height}p`,
-        height: f.height,
-        fps: f.fps || 'N/A',
-        vcodec: f.vcodec,
-        acodec: f.acodec,
-        filesize: f.filesize || f.filesize_approx || null,
-        format_note: f.format_note || ''
-      }))
-      .sort((a, b) => b.height - a.height);
-
-    // 音声フォーマット抽出
-    const audioFormats = formats
-      .filter(f => f.acodec !== 'none' && f.vcodec === 'none')
-      .map(f => ({
-        format_id: f.format_id,
-        ext: f.ext,
-        abr: f.abr || 'N/A',
-        acodec: f.acodec,
-        filesize: f.filesize || f.filesize_approx || null,
-        format_note: f.format_note || ''
-      }))
-      .sort((a, b) => (b.abr || 0) - (a.abr || 0));
-
-    const responseData = {
-      success: true,
-      video_info: {
-        title: videoInfo.title,
-        duration: videoInfo.duration,
-        thumbnail: videoInfo.thumbnail,
-        uploader: videoInfo.uploader,
-        view_count: videoInfo.view_count
-      },
-      video_formats: videoFormats,
-      audio_formats: audioFormats
-    };
-
-    formatCache.set(cacheKey, responseData);
-    console.log(`[Success] ${videoFormats.length} video, ${audioFormats.length} audio formats`);
-
-    res.json(responseData);
-
+  try {
+    const result = await analysisPromise;
+    res.json(result);
   } catch (error) {
-    console.error('[Analyze Error]', error);
     res.status(500).json({
       error: 'URL解析に失敗しました',
       details: error.message
     });
+  } finally {
+    pendingAnalyses.delete(url);
   }
 });
 
