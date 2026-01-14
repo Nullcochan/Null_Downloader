@@ -192,10 +192,21 @@ app.get('/health', (req, res) => {
 
 // ダウンロードエンドポイント
 app.post('/download', async (req, res) => {
-  const { url, format_id, download_type, audio_format, title } = req.body;
+  const { url, format_id, download_type, audio_format, title, cookies } = req.body;
 
   if (!url) {
     return res.status(400).json({ error: 'URLが指定されていません' });
+  }
+
+  // クッキーファイルの一時保存
+  let cookieFilePath = null;
+  if (cookies) {
+    cookieFilePath = path.join(TMP_DIR, `cookie_dl_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.txt`);
+    try {
+      require('fs').writeFileSync(cookieFilePath, cookies);
+    } catch (e) {
+      console.error('[Cookie Write Error]', e);
+    }
   }
 
   const timestamp = Date.now();
@@ -219,7 +230,7 @@ app.post('/download', async (req, res) => {
     for (const client of clients) {
       try {
         const formatSelector = determineFormatSelector(format_id, download_type);
-        const ytDlpCommand = buildYtDlpCommand(url, formatSelector, download_type, expectedExt, outputPath, client);
+        const ytDlpCommand = buildYtDlpCommand(url, formatSelector, download_type, expectedExt, outputPath, client, cookieFilePath);
         console.log(`[Execute Download][${jobId}] Client: ${client}, Command: ${ytDlpCommand}`);
         await execCommand(ytDlpCommand);
         downloadSuccess = true;
@@ -298,20 +309,38 @@ app.post('/download', async (req, res) => {
         details: error.message
       });
     }
+  } finally {
+    // クッキーファイルの削除
+    if (cookieFilePath && require('fs').existsSync(cookieFilePath)) {
+      try {
+        require('fs').unlinkSync(cookieFilePath);
+      } catch (e) { /* ignore */ }
+    }
   }
 });
 
 // URL解析エンドポイント
 app.post('/analyze', async (req, res) => {
-  const { url } = req.body;
+  const { url, cookies } = req.body;
 
   if (!url) {
     return res.status(400).json({ error: 'URLが指定されていません' });
   }
 
-  console.log(`[Analyze] URL: ${url}`);
+  console.log(`[Analyze] URL: ${url} (Cookie provided: ${!!cookies})`);
 
-  const cacheKey = `format_${url}`;
+  // クッキーファイルの一時保存
+  let cookieFilePath = null;
+  if (cookies) {
+    cookieFilePath = path.join(TMP_DIR, `cookie_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.txt`);
+    try {
+      require('fs').writeFileSync(cookieFilePath, cookies);
+    } catch (e) {
+      console.error('[Cookie Write Error]', e);
+    }
+  }
+
+  const cacheKey = `format_${url}_${!!cookies}`;
 
   const analysisPromise = (async () => {
     try {
@@ -332,7 +361,10 @@ app.post('/analyze', async (req, res) => {
 
       for (const client of clients) {
         try {
-          const ytDlpCommand = `yt-dlp --dump-json --no-playlist --no-warnings --no-check-certificate --extractor-args "youtube:player_client=${client}" "${url}"`;
+          let ytDlpCommand = `yt-dlp --dump-json --no-playlist --no-warnings --no-check-certificate --extractor-args "youtube:player_client=${client}" "${url}"`;
+          if (cookieFilePath) {
+            ytDlpCommand += ` --cookies "${cookieFilePath}"`;
+          }
           console.log(`[Execute Analyze] Client: ${client}, Command: ${ytDlpCommand}`);
           jsonOutput = await execCommand(ytDlpCommand);
           analyzeSuccess = true;
@@ -410,6 +442,13 @@ app.post('/analyze', async (req, res) => {
     } catch (error) {
       console.error('[Analyze Error]', error);
       throw error;
+    } finally {
+      // クッキーファイルの削除
+      if (cookieFilePath && require('fs').existsSync(cookieFilePath)) {
+        try {
+          require('fs').unlinkSync(cookieFilePath);
+        } catch (e) { /* ignore */ }
+      }
     }
   })();
 

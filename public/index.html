@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Null Downloader - 動画・音声ダウンローダー</title>
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
   <div class="container">
     <!-- ヘッダー -->
@@ -19,14 +21,25 @@
       <!-- URL入力セクション -->
       <div class="input-section">
         <div class="input-wrapper">
-          <input
-            type="text"
-            id="urlInput"
-            placeholder="https://www.youtube.com/watch?v=... (YouTube, TikTok, Vimeo, etc.)"
-            autocomplete="off"
-          >
+          <input type="text" id="urlInput"
+            placeholder="https://www.youtube.com/watch?v=... (YouTube, TikTok, Vimeo, etc.)" autocomplete="off">
           <button id="analyzeBtn" onclick="startDownload()">解析する</button>
         </div>
+
+        <!-- Cookie入力用 (IP制限回避) -->
+        <details class="advanced-settings"
+          style="margin-top: 15px; border: 1px solid #444; padding: 10px; border-radius: 5px;">
+          <summary style="cursor: pointer; color: #aaa; user-select: none;">高度な設定: YouTube Cookies (年齢制限・IPブロック回避用)
+          </summary>
+          <div style="margin-top: 10px;">
+            <p style="font-size: 0.8rem; color: #888; margin-bottom: 5px;">
+              Renderサーバーがブロックされている場合、ブラウザから取得したNetscape形式のCookieを貼り付けてください。<br>
+              拡張機能「Get cookies.txt LOCALLY」などで取得できます。
+            </p>
+            <textarea id="cookieInput" placeholder="# Netscape HTTP Cookie File..."
+              style="width: 100%; height: 80px; background: #222; color: #fff; border: 1px solid #555; border-radius: 4px; font-family: monospace; font-size: 10px;"></textarea>
+          </div>
+        </details>
       </div>
 
       <!-- サムネイル表示セクション -->
@@ -85,6 +98,7 @@
       const urlInput = document.getElementById('urlInput');
       const analyzeBtn = document.getElementById('analyzeBtn');
       const url = urlInput.value.trim();
+      const cookies = document.getElementById('cookieInput').value.trim();
 
       if (!url) {
         updateStatus('error', 'URLを入力してください');
@@ -110,7 +124,7 @@
           headers: {
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ url })
+          body: JSON.stringify({ url, cookies })
         });
 
         if (!response.ok) {
@@ -292,7 +306,8 @@
         const requestBody = {
           url: currentUrl,
           format_id: formatId,
-          download_type: downloadType
+          download_type: downloadType,
+          cookies: document.getElementById('cookieInput').value.trim()
         };
 
         // 音声フォーマットが指定されている場合は追加
@@ -418,4 +433,5 @@
     });
   </script>
 </body>
+
 </html>
