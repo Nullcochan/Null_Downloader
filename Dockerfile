@@ -1,53 +1,32 @@
-# Multi-stage build for optimized Docker image
-FROM node:18-alpine AS builder
+# Dockerfile for Null Downloader (Debian-based for high stability)
+FROM node:18
 
-# Install build dependencies
-RUN apk add --no-cache python3 make g++
+# Install runtime dependencies (yt-dlp and ffmpeg)
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    python3 \
+    python3-pip \
+    curl \
+    && pip3 install --no-cache-dir yt-dlp \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Install production dependencies only
+# Install production dependencies
 RUN npm install --only=production
 
-# Production stage
-FROM node:18-alpine
-
-# Install runtime dependencies (yt-dlp and ffmpeg)
-RUN apk add --no-cache \
-    ffmpeg \
-    python3 \
-    py3-pip \
-    && pip3 install --no-cache-dir --break-system-packages yt-dlp
-
-# Create non-root user for security
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
-
-WORKDIR /app
-
-# Copy dependencies from builder
-COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
-
 # Copy application files
-COPY --chown=nodejs:nodejs package*.json ./
-COPY --chown=nodejs:nodejs server.js ./server.js
-COPY --chown=nodejs:nodejs public ./public
+COPY . .
 
 # Create tmp directory with proper permissions
-RUN mkdir -p tmp && chown nodejs:nodejs tmp
-
-# Switch to non-root user
-USER nodejs
+RUN mkdir -p tmp && chmod 777 tmp
 
 # Expose port
 EXPOSE 3000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); });"
 
 # Start application
 CMD ["node", "server.js"]

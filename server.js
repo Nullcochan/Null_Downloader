@@ -5,6 +5,14 @@ const fs = require('fs').promises;
 const { existsSync, createReadStream } = require('fs');
 const NodeCache = require('node-cache');
 
+// グローバルエラーハンドラ
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Unhandled Rejection] at:', promise, 'reason:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Uncaught Exception] Error:', err);
+});
+
 // ==================== 設定 ====================
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -150,22 +158,23 @@ async function cleanupTimestampFiles(timestamp, tmpDir) {
   }
 }
 
-// コマンド実行
+// コマンド実行（詳細ログ付き）
 function execCommand(command) {
   return new Promise((resolve, reject) => {
-    exec(command, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
+    exec(command, { maxBuffer: 1024 * 1024 * 50 }, (error, stdout, stderr) => {
       if (error) {
-        if (stdout && stdout.trim()) {
-          console.log('[Command] Warning (stderr present):', stderr);
+        const errorMsg = stderr || error.message;
+        if (stdout && stdout.trim() && stdout.includes('{')) {
+          console.warn('[Command Warning] Error present but JSON might be there:', errorMsg);
           resolve(stdout);
           return;
         }
-        console.error('[Command Error]', stderr || error.message);
-        reject(new Error(stderr || error.message));
+        console.error('[Command Error Details]', errorMsg);
+        reject(new Error(errorMsg));
         return;
       }
       if (stderr && stderr.trim()) {
-        console.log('[Command] Warning:', stderr);
+        console.log('[Command Stderr (Non-critical)]:', stderr);
       }
       resolve(stdout);
     });
@@ -408,12 +417,17 @@ app.post('/analyze', async (req, res) => {
 
   try {
     const result = await analysisPromise;
-    res.json(result);
+    if (!res.headersSent) {
+      res.json(result);
+    }
   } catch (error) {
-    res.status(500).json({
-      error: 'URL解析に失敗しました',
-      details: error.message
-    });
+    console.error('[Analyze Endpoint Catch]', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'URL解析に失敗しました',
+        details: error.message
+      });
+    }
   } finally {
     pendingAnalyses.delete(url);
   }
